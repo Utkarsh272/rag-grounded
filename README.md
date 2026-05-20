@@ -2,7 +2,7 @@
 
 > Production-grade document Q&A: every answer cites exact source spans, every claim carries a confidence score, and the system says "I don't know" when retrieval is weak.
 
-**Status**: 🚧 In progress — Days 1–3 complete (ingestion + vector search + hybrid retrieval), Days 4–10 in progress.
+**Status**: 🚧 In progress — Days 1–4 complete (ingestion + vector search + hybrid retrieval + LLM generation with citations), Days 5–10 in progress.
 
 ---
 
@@ -11,9 +11,10 @@
 Most RAG demos retrieve chunks and dump them into an LLM prompt. This project goes further:
 
 - **Inline citations** — every claim in the answer links back to the exact source span in the original document, not just the document name
-- **Confidence scoring** — each claim is scored independently; low-confidence claims are flagged in the UI
-- **Abstention** — when retrieval similarity is uniformly weak, the system says "I don't have enough information" instead of hallucinating
-- **Hybrid retrieval** — vector search + BM25 keyword search fused via Reciprocal Rank Fusion, then reranked with a cross-encoder
+- **Confidence scoring** — each claim is scored independently; low-confidence claims are flagged in the UI (Day 5)
+- **Abstention** — when retrieval is too weak, the system says "I don't have enough information" instead of hallucinating (Day 5)
+- **Hybrid retrieval** — vector search + BM25 fused via Reciprocal Rank Fusion, then reranked with a cross-encoder
+- **SSE streaming** — answers stream word-by-word to the client; citation metadata follows in the same stream
 
 ---
 
@@ -23,7 +24,7 @@ Most RAG demos retrieve chunks and dump them into an LLM prompt. This project go
 graph LR
     User[User] --> UI[Next.js + TS UI]
     UI -->|upload| API[FastAPI Backend]
-    UI -->|/ask| API
+    UI -->|/ask SSE| API
     API --> Parser[unstructured Parser]
     Parser --> Chunker[Structure-aware Chunker]
     Chunker --> Embedder[all-MiniLM-L6-v2 Local Embedder]
@@ -31,10 +32,11 @@ graph LR
     API --> Retriever[Hybrid Retriever]
     Retriever --> PG
     Retriever --> Reranker[Cross-Encoder Reranker]
-    Reranker --> LLM[LLM Generation]
-    LLM --> Verifier[Claim Verifier]
-    Verifier --> Response[Answer + Citations + Confidence]
-    Response --> UI
+    Reranker --> LLM[Groq / Claude Sonnet]
+    LLM --> CitParser[Citation Parser]
+    CitParser --> Verifier[Claim Verifier - Day 5]
+    Verifier --> SSE[SSE Stream]
+    SSE --> UI
 ```
 
 ---
@@ -47,9 +49,11 @@ graph LR
 | Backend | Python 3.12 + FastAPI + Pydantic | Best AI/ML ecosystem |
 | Vector DB | pgvector on Supabase (free) | No Pinecone cost |
 | Embeddings | `all-MiniLM-L6-v2` via sentence-transformers | Free, runs on CPU |
-| LLM | Groq Llama 3.3 70B (dev) + Claude Sonnet (final demo) | Free dev path |
+| LLM (dev) | Groq Llama 3.3 70B | Free tier, ~2s latency |
+| LLM (demo) | Anthropic Claude Sonnet | Switched via env var |
 | Doc parsing | `unstructured` | Production-grade PDF/MD parsing |
 | Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Free, runs on CPU |
+| Streaming | Server-Sent Events (SSE) | Unidirectional, simpler than WebSocket |
 | Hosting | Vercel (frontend) + Render (backend) | Free tier |
 
 ---
@@ -63,7 +67,9 @@ graph LR
 │       ├── main.py               # FastAPI app + route wiring
 │       ├── /routes
 │       │   ├── documents.py      # Upload, list, status endpoints
-│       │   └── search.py         # Search (?mode=vector|hybrid|compare)
+│       │   ├── search.py         # Search (?mode=vector|hybrid|compare)
+│       │   ├── conversations.py  # Create / list / get conversations
+│       │   └── messages.py       # Ask question → SSE stream
 │       ├── /ingestion
 │       │   ├── chunker.py        # Structure-aware chunker with char offsets
 │       │   └── embedder.py       # Local sentence-transformers embedder
@@ -72,7 +78,10 @@ graph LR
 │       │   ├── bm25.py           # Postgres tsvector full-text search
 │       │   ├── reranker.py       # Cross-encoder reranker (ms-marco-MiniLM-L-6-v2)
 │       │   └── hybrid.py         # RRF fusion: vector + BM25 → rerank → top-5
-│       ├── /generation           # (Day 4) LLM + citation injection
+│       ├── /generation
+│       │   ├── llm.py            # Groq + Anthropic client, swapped via LLM_PROVIDER
+│       │   ├── prompt.py         # System prompt with [SOURCE_X] citation instructions
+│       │   └── citation_parser.py # Parse [SOURCE_X] tokens → citation objects
 │       ├── /verification         # (Day 5) Claim scoring + abstention
 │       └── /db
 │           └── client.py         # Supabase client
@@ -84,14 +93,26 @@ graph LR
 ## API Endpoints
 
 ```
-POST   /v1/documents               Upload PDF/MD/TXT → {document_id, status}
-GET    /v1/documents               List all documents
-GET    /v1/documents/{id}/status   Poll ingestion status
-GET    /v1/search?q=...            Semantic search across chunks
-         &top_k=5                    Number of results (default 5, max 20)
-         &document_id=<uuid>         Scope to one document (optional)
-         &mode=hybrid                vector | hybrid | compare (default: hybrid)
-GET    /healthz                    Liveness check
+POST   /v1/documents                      Upload PDF/MD/TXT → {document_id, status}
+GET    /v1/documents                      List all documents
+GET    /v1/documents/{id}/status          Poll ingestion status
+
+GET    /v1/search?q=...                   Semantic search across chunks
+         &top_k=5                           Number of results (default 5, max 20)
+         &document_id=<uuid>               Scope to one document (optional)
+         &mode=hybrid                       vector | hybrid | compare (default: hybrid)
+
+POST   /v1/conversations                  Body: {document_id} → {conversation_id}
+GET    /v1/conversations                  List all conversations
+GET    /v1/conversations/{id}             Get conversation + message history
+
+POST   /v1/conversations/{id}/messages    Body: {question} → SSE stream
+                                          event: token    {"text": "..."}
+                                          event: citation {"id", "chunk_id", "section", ...}
+                                          event: complete {"message_id", "answer", "citations", ...}
+                                          event: error    {"detail": "..."}
+
+GET    /healthz                           Liveness check
 ```
 
 ---
@@ -116,7 +137,17 @@ Vector search alone misses exact keyword matches ("backpropagation", "RLHF", pro
 
 The top-10 RRF candidates then go through a cross-encoder reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`, ~23 MB, runs on CPU). Unlike bi-encoder embeddings, the cross-encoder sees both query and passage together, giving much sharper relevance scores at the cost of being non-pre-computable. Running it only on the top-10 RRF candidates keeps latency acceptable.
 
-The `/v1/search?mode=compare` endpoint returns all three modes side-by-side — this feeds directly into the Day 8 eval harness for the recall@5 and citation precision numbers in the table below.
+### Citation injection via [SOURCE_X] tokens
+
+The LLM is instructed via system prompt to emit `[SOURCE_X]` inline after every claim it makes. After generation, `citation_parser.py` extracts these tokens with a regex, maps each `SOURCE_X` number to the corresponding chunk's UUID and `(start_char, end_char)` span, and replaces tokens with clean `[1]`, `[2]` markers in the answer text. Hallucinated citation numbers (outside the range of provided chunks) are silently dropped and logged.
+
+The abstention sentinel `INSUFFICIENT_INFO` is checked before any parsing — if the LLM returns exactly that string, the answer is replaced with a human-readable refusal and `abstained: true` is stored in the message record. Day 5 adds proactive abstention before the LLM call based on retrieval confidence scores.
+
+### SSE streaming: two-phase approach
+
+True token-by-token LLM streaming would require buffering the full response anyway to resolve `[SOURCE_X]` citations (you can't map a citation token to a chunk ID until you know which chunks were retrieved). Instead, the pipeline calls the LLM once (blocking, ~2s on Groq), parses the full response, then streams the answer word-by-word over SSE at ~50 words/sec. This gives the UI a live typing effect while keeping citation resolution simple. Citation metadata follows as `citation` events after the answer tokens complete.
+
+The LLM provider is swapped via the `LLM_PROVIDER` env var (`groq` or `anthropic`) with zero code changes — Groq for development (free), Claude Sonnet for the final demo and README screenshots.
 
 ---
 
@@ -127,6 +158,7 @@ The `/v1/search?mode=compare` endpoint returns all three modes side-by-side — 
 - Python 3.12+
 - `uv` (Python package manager)
 - A free [Supabase](https://supabase.com) account
+- A free [Groq](https://console.groq.com) account (for LLM calls)
 
 ### Database setup
 
@@ -158,6 +190,27 @@ CREATE TABLE chunks (
 
 CREATE INDEX chunks_embedding_idx ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX chunks_ts_idx ON chunks USING gin(ts_vector);
+
+CREATE TABLE conversations (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
+  title       TEXT,
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE messages (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  role            TEXT NOT NULL,
+  content         TEXT NOT NULL,
+  citations       JSONB,
+  claim_scores    JSONB,
+  abstained       BOOLEAN DEFAULT false,
+  retrieval_meta  JSONB,
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX messages_conversation_idx ON messages (conversation_id, created_at);
 ```
 
 Vector similarity search function:
@@ -208,11 +261,28 @@ AS $$
 $$;
 ```
 
-### Backend
+### Environment variables
 
 ```bash
 cd api
-cp .env.example .env   # fill in your Supabase URL + service key
+cp .env.example .env
+```
+
+Fill in `.env`:
+
+```
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-role-key
+
+GROQ_API_KEY=gsk_...          # free at console.groq.com
+ANTHROPIC_API_KEY=sk-ant-...  # for final demo only
+LLM_PROVIDER=groq             # groq | anthropic
+```
+
+### Run
+
+```bash
+cd api
 uv sync
 uv run uvicorn app.main:app --reload --port 8000
 ```
@@ -236,7 +306,7 @@ uv run uvicorn app.main:app --reload --port 8000
 - [x] Day 1 — Scaffolding, PDF/MD ingestion, document storage
 - [x] Day 2 — Structure-aware chunking, local embeddings, vector search
 - [x] Day 3 — BM25 keyword search + hybrid RRF fusion + cross-encoder reranking
-- [ ] Day 4 — LLM answer generation with inline citation injection
+- [x] Day 4 — LLM answer generation with inline citation injection and SSE streaming
 - [ ] Day 5 — Claim verification, confidence scoring, abstention
 - [ ] Day 6 — Frontend: chat UI, citation highlighting, file uploader
 - [ ] Day 7 — Auth (Supabase), multi-tenancy, deployment
