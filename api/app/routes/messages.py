@@ -5,38 +5,26 @@ Message endpoint with Server-Sent Events streaming.
 POST /v1/conversations/{id}/messages
   Body: {"question": "..."}
 
+Pipeline (Day 5 update):
+  1. Save user message
+  2. Hybrid retrieve top-5 chunks
+  3. Pre-LLM abstention check (verification/abstention.py)
+     → if weak retrieval: stream abstain event, save message, done
+  4. Build prompt + call LLM
+  5. Parse [SOURCE_X] citations (generation/citation_parser.py)
+     → if LLM returned INSUFFICIENT_INFO: abstain path
+  6. Score claims for confidence (verification/confidence.py)
+  7. Stream answer word-by-word (token events)
+  8. Stream citation metadata (citation events)
+  9. Save assistant message with citations + claim_scores + abstained flag
+  10. Stream complete event
+
 SSE stream format:
-  event: token
-  data: {"text": "..."}        <- one or more word chunks while generating
-
-  event: citation
-  data: {"id": 1, "chunk_id": "...", "section": "...", "start_char": 0, "end_char": 100}
-
-  event: complete
-  data: {
-    "message_id": "...",
-    "answer": "Full answer with [1] markers",
-    "citations": [...],
-    "abstained": false,
-    "retrieval_meta": {"top5_avg_similarity": 0.72, "chunk_count": 5}
-  }
-
-  event: error
-  data: {"detail": "..."}
-
-Why SSE over WebSocket?
-  SSE is unidirectional (server → client), which is all we need for streaming
-  answers. It's simpler than WebSocket: no upgrade handshake, works over HTTP/1.1,
-  and FastAPI + httpx handle it cleanly via StreamingResponse.
-
-Why not stream token-by-token from the LLM?
-  Groq and Anthropic both support streaming, but integrating streaming LLM output
-  with citation parsing (which needs the full response to resolve [SOURCE_X] tokens)
-  is complex. Day 4 uses a simpler two-phase approach:
-    1. Call LLM (blocking, <3s on Groq).
-    2. Parse citations from the full response.
-    3. Stream the answer word-by-word over SSE (simulates token streaming for the UI).
-  True token-by-token LLM streaming is a stretch goal after Day 6.
+  event: token      data: {"text": "..."}
+  event: citation   data: {"id", "chunk_id", "section", "start_char", "end_char", "text"}
+  event: complete   data: {"message_id", "answer", "citations", "claim_scores",
+                           "abstained", "retrieval_meta"}
+  event: error      data: {"detail": "..."}
 """
 
 from __future__ import annotations
@@ -53,6 +41,8 @@ from app.generation.citation_parser import parse_citations
 from app.generation.llm import generate
 from app.generation.prompt import build_system_prompt, build_user_prompt
 from app.retrieval.hybrid import hybrid_retrieve
+from app.verification.abstention import should_abstain
+from app.verification.confidence import score_claims
 
 router = APIRouter()
 
@@ -68,15 +58,12 @@ def _sse(event: str, data: dict) -> str:
 
 @router.post("/v1/conversations/{conversation_id}/messages")
 async def ask(conversation_id: str, body: AskRequest):
-    """
-    Ask a question in a conversation. Returns an SSE stream.
-    """
+    """Ask a question in a conversation. Returns an SSE stream."""
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="Question must not be blank.")
 
     sb = get_supabase()
 
-    # Verify conversation exists and get document_id
     conv = (
         sb.table("conversations")
         .select("id, document_id")
@@ -105,42 +92,85 @@ async def ask(conversation_id: str, body: AskRequest):
             )
 
             if not chunks:
-                # No chunks at all — document may be empty or not yet indexed
                 yield _sse("error", {"detail": "No relevant content found in this document."})
                 return
 
-            # Compute retrieval metadata for the complete event
-            avg_similarity = None
-            if hasattr(chunks[0], "rerank_score"):
-                # HybridResult — use rerank scores as a proxy for relevance
-                avg_similarity = round(
-                    sum(c.rerank_score for c in chunks) / len(chunks), 4
-                )
-
             retrieval_meta = {
                 "chunk_count": len(chunks),
-                "top5_avg_rerank_score": avg_similarity,
+                "top3_avg_rerank_score": round(
+                    sum(sorted([c.rerank_score for c in chunks], reverse=True)[:3])
+                    / min(3, len(chunks)),
+                    4,
+                ),
             }
 
-            # ── 3. Build prompt and call LLM ─────────────────────────────────
+            # ── 3. Pre-LLM abstention check ───────────────────────────────────
+            abstain, reason = should_abstain(chunks=chunks, query=body.question)
+
+            if abstain:
+                abstain_answer = (
+                    "I don't have enough information in this document to answer "
+                    f"your question confidently. {reason}"
+                )
+                saved = sb.table("messages").insert({
+                    "conversation_id": conversation_id,
+                    "role": "assistant",
+                    "content": abstain_answer,
+                    "citations": [],
+                    "claim_scores": [],
+                    "abstained": True,
+                    "retrieval_meta": retrieval_meta,
+                }).execute()
+
+                message_id = saved.data[0]["id"] if saved.data else None
+
+                # Stream the abstain answer word-by-word so the UI looks consistent
+                for word in abstain_answer.split(" "):
+                    yield _sse("token", {"text": word + " "})
+                    time.sleep(0.02)
+
+                yield _sse("complete", {
+                    "message_id": message_id,
+                    "answer": abstain_answer,
+                    "citations": [],
+                    "claim_scores": [],
+                    "abstained": True,
+                    "retrieval_meta": retrieval_meta,
+                })
+                return
+
+            # ── 4. Build prompt + call LLM ────────────────────────────────────
             system_prompt = build_system_prompt(chunks)
             user_prompt = build_user_prompt(body.question)
-
-            # This is blocking but fast (<3s on Groq free tier).
             raw_output = generate(system=system_prompt, user=user_prompt)
 
-            # ── 4. Parse citations ────────────────────────────────────────────
+            # ── 5. Parse citations (also handles post-LLM INSUFFICIENT_INFO) ──
             parsed = parse_citations(raw_output, chunks)
 
-            # ── 5. Stream answer word-by-word ─────────────────────────────────
-            # Split on spaces to simulate token streaming. The frontend renders
-            # words as they arrive, giving a live "typing" effect.
-            words = parsed.answer.split(" ")
-            for word in words:
-                yield _sse("token", {"text": word + " "})
-                time.sleep(0.02)  # 20ms between words ≈ ~50 words/sec
+            # ── 6. Score claims for confidence ────────────────────────────────
+            # Skip scoring if the LLM abstained — there are no claims to score.
+            claim_scores = []
+            if not parsed.abstained:
+                scored = score_claims(
+                    answer=parsed.answer,
+                    citations=parsed.citations,
+                    chunks=chunks,
+                )
+                claim_scores = [
+                    {
+                        "claim": cs.claim,
+                        "score": cs.score,
+                        "low_confidence": cs.low_confidence,
+                    }
+                    for cs in scored
+                ]
 
-            # ── 6. Stream citation metadata ───────────────────────────────────
+            # ── 7. Stream answer word-by-word ─────────────────────────────────
+            for word in parsed.answer.split(" "):
+                yield _sse("token", {"text": word + " "})
+                time.sleep(0.02)
+
+            # ── 8. Stream citation metadata ───────────────────────────────────
             for citation in parsed.citations:
                 yield _sse("citation", {
                     "id": citation.id,
@@ -151,7 +181,7 @@ async def ask(conversation_id: str, body: AskRequest):
                     "text": citation.text,
                 })
 
-            # ── 7. Save assistant message to DB ──────────────────────────────
+            # ── 9. Save assistant message ─────────────────────────────────────
             citations_json = [
                 {
                     "id": c.id,
@@ -169,17 +199,19 @@ async def ask(conversation_id: str, body: AskRequest):
                 "role": "assistant",
                 "content": parsed.answer,
                 "citations": citations_json,
+                "claim_scores": claim_scores,
                 "abstained": parsed.abstained,
                 "retrieval_meta": retrieval_meta,
             }).execute()
 
             message_id = saved.data[0]["id"] if saved.data else None
 
-            # ── 8. Send complete event ────────────────────────────────────────
+            # ── 10. Send complete event ───────────────────────────────────────
             yield _sse("complete", {
                 "message_id": message_id,
                 "answer": parsed.answer,
                 "citations": citations_json,
+                "claim_scores": claim_scores,
                 "abstained": parsed.abstained,
                 "retrieval_meta": retrieval_meta,
             })
@@ -193,7 +225,6 @@ async def ask(conversation_id: str, body: AskRequest):
         stream(),
         media_type="text/event-stream",
         headers={
-            # Disable buffering so tokens reach the client immediately
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },

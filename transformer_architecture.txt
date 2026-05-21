@@ -1,0 +1,65 @@
+# Transformer Architecture and Attention Mechanisms
+
+## Introduction
+
+The Transformer is a deep learning architecture introduced in the 2017 paper "Attention Is All You Need" by Vaswani et al. at Google Brain. Unlike earlier sequence models that relied on recurrent neural networks (RNNs) or convolutional neural networks (CNNs), the Transformer is built entirely on attention mechanisms. This design choice allows for significantly more parallelisation during training and has proven highly effective across a wide range of natural language processing tasks.
+
+The Transformer architecture has since become the foundation for most modern large language models, including BERT, GPT, T5, and their successors. Its impact on the field of artificial intelligence has been profound, enabling models of unprecedented scale and capability.
+
+## Self-Attention Mechanism
+
+The core innovation of the Transformer is the self-attention mechanism, also called scaled dot-product attention. Self-attention allows every position in a sequence to attend to every other position in the same sequence, capturing long-range dependencies that RNNs struggle with due to vanishing gradients.
+
+For each token in the input sequence, three vectors are computed: a Query (Q), a Key (K), and a Value (V). These are obtained by multiplying the token's embedding by three learned weight matrices. The attention score between two tokens is computed as the dot product of the Query vector of one token with the Key vector of another, scaled by the square root of the dimension of the key vectors to prevent the dot products from growing too large in magnitude.
+
+The scaling factor is important because large dot products push the softmax function into regions with very small gradients, making training unstable. After scaling, a softmax function is applied to convert the scores into a probability distribution, which is then used to compute a weighted sum of the Value vectors. The result is a context-aware representation for each token that incorporates information from all other tokens in the sequence.
+
+## Multi-Head Attention
+
+Rather than performing a single attention operation, the Transformer uses multi-head attention. The idea is to run the attention mechanism multiple times in parallel, each time with different learned projection matrices for Q, K, and V. Each parallel attention operation is called a head.
+
+Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions. For example, one head might learn to track syntactic relationships like subject-verb agreement, while another head captures semantic similarity between words. With a single attention head, averaging these different types of relationships would limit the model's expressiveness.
+
+The outputs of all attention heads are concatenated and projected back to the model's hidden dimension using another learned weight matrix. This design keeps the total computational cost similar to single-head attention with the full dimensionality, while gaining the benefit of multiple representation subspaces.
+
+## Positional Encoding
+
+Because the Transformer processes all tokens in parallel rather than sequentially, it has no inherent notion of token order. To address this, positional encodings are added to the input embeddings before feeding them into the network. These encodings inject information about the position of each token in the sequence.
+
+The original Transformer uses fixed sinusoidal positional encodings, where each dimension of the encoding corresponds to a sinusoid of a different frequency. The intuition is that the model can learn to attend to relative positions because for any fixed offset, the positional encoding at position plus offset can be represented as a linear function of the encoding at position. Later models like BERT use learned positional embeddings instead, and more recent architectures such as RoPE (Rotary Position Embedding) and ALiBi encode relative positions directly into the attention computation.
+
+## Feed-Forward Sublayers
+
+Each Transformer layer contains two sublayers: a multi-head attention sublayer and a position-wise feed-forward network (FFN). The FFN is applied independently and identically to each position, consisting of two linear transformations with a ReLU or GELU activation in between.
+
+The FFN expands the hidden dimension by a factor of four in the intermediate layer before projecting back down to the model dimension. This expansion and contraction allows the model to learn complex non-linear transformations for each token independently of other tokens. Research has suggested that the FFN layers function as a kind of key-value memory, storing factual associations learned during pre-training.
+
+Both sublayers are wrapped with a residual connection followed by layer normalisation. The residual connections allow gradients to flow directly through the network without passing through the attention or FFN transformations, which is critical for training very deep Transformers. Layer normalisation stabilises the activations at each layer, making training faster and more stable.
+
+## Encoder and Decoder Stacks
+
+The original Transformer has an encoder-decoder architecture designed for sequence-to-sequence tasks like machine translation. The encoder processes the input sequence and produces a sequence of continuous representations. The decoder then generates the output sequence one token at a time, attending to both the encoder's output and the previously generated tokens.
+
+The encoder stack consists of N identical layers, each with a multi-head self-attention sublayer and a feed-forward sublayer. The decoder stack also has N identical layers, but each decoder layer has three sublayers: masked multi-head self-attention (to prevent attending to future tokens during training), cross-attention over the encoder's output, and a feed-forward sublayer.
+
+Many modern language models use only the encoder (e.g. BERT, used for classification and representation tasks) or only the decoder (e.g. GPT, used for text generation). Encoder-only models produce rich bidirectional representations because each token can attend to all others. Decoder-only models are autoregressive and generate text left to right.
+
+## Training and Pre-training
+
+Transformers are typically pre-trained on large corpora using self-supervised objectives. The most common objectives are masked language modelling (used in BERT), where random tokens are masked and the model must predict them, and causal language modelling (used in GPT), where the model predicts the next token given all previous tokens.
+
+Pre-training on diverse, large-scale data allows the model to learn broad linguistic knowledge and world knowledge. The pre-trained model is then fine-tuned on downstream tasks with relatively small labelled datasets, a paradigm known as transfer learning. This approach has been transformative because it decouples the expensive representation learning phase from the task-specific learning phase.
+
+Training large Transformers requires significant computational resources. Techniques such as mixed-precision training, gradient checkpointing, and distributed training across many GPUs or TPUs are standard practice. The cost of training frontier models has grown to tens of millions of dollars, raising important questions about accessibility and environmental impact.
+
+## Limitations and Challenges
+
+Despite their success, Transformers have several notable limitations. The self-attention mechanism has quadratic time and memory complexity with respect to sequence length, because every token attends to every other token. This makes processing very long documents computationally expensive. Numerous efficient attention variants have been proposed to address this, including sparse attention, linear attention, and sliding window attention.
+
+Transformers also require large amounts of data and compute to perform well. Smaller models trained on limited data often underperform simpler baselines. Additionally, despite their strong empirical performance, Transformers can be difficult to interpret. Understanding why a model produces a particular output remains an active research challenge, with implications for safety and reliability in high-stakes applications.
+
+## Recent Advances
+
+Recent work has extended the Transformer in several important directions. Instruction tuning and reinforcement learning from human feedback (RLHF) have made large language models significantly more useful and aligned with human intent. Mixture-of-experts (MoE) architectures route each token through a subset of specialised feed-forward layers, dramatically increasing model capacity without proportionally increasing computation. Retrieval-augmented generation (RAG) combines Transformers with external knowledge retrieval, allowing models to access up-to-date information beyond what was seen during training.
+
+The Transformer architecture continues to evolve rapidly. Researchers are exploring alternatives to softmax attention, more efficient positional encodings, better scaling laws, and architectures that combine the strengths of Transformers with other sequence modelling approaches such as state space models. The architecture introduced in 2017 has proven remarkably durable, but the field continues to push its boundaries.
