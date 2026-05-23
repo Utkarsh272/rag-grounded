@@ -1,0 +1,12 @@
+{
+  "buildCommand": "cd web && pnpm install --frozen-lockfile && pnpm build",
+  "outputDirectory": "web/.next",
+  "installCommand": "cd web && pnpm install --frozen-lockfile",
+  "framework": "nextjs",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://rag-grounded-api.onrender.com/$1"
+    }
+  ]
+}
