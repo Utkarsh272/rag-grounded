@@ -1,26 +1,20 @@
+# api/app/retrieval/reranker.py
 """
-Cross-encoder reranker.
+Reranker — lightweight version for production (no cross-encoder model).
 
-Uses `cross-encoder/ms-marco-MiniLM-L-6-v2` from Hugging Face — a small
-(~23 MB) model that scores (query, passage) pairs directly. Unlike bi-encoder
-embeddings, the cross-encoder sees both texts at once, giving much better
-relevance scores at the cost of being O(N) per query (not pre-computable).
+In production (RERANKER=none), returns candidates sorted by RRF score as-is.
+In dev (RERANKER=crossencoder), uses cross-encoder/ms-marco-MiniLM-L-6-v2.
 
-sentence-transformers is already installed (used for embeddings in embedder.py),
-so no new dependency is needed.
+The cross-encoder gives better precision but requires ~300MB RAM which exceeds
+Render's free tier (512MB). RRF alone is still significantly better than
+vector-only retrieval.
 
-Model downloads to ~/.cache/huggingface on first run (~23 MB).
+Set RERANKER=crossencoder in your local .env to enable it locally.
 """
-
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from functools import lru_cache
-
-from sentence_transformers import CrossEncoder  # type: ignore
-
-
-RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
 @dataclass
@@ -31,67 +25,61 @@ class RankedChunk:
     section_title: str | None
     start_char: int
     end_char: int
-    rerank_score: float  # raw cross-encoder logit (higher = more relevant)
-
-
-@lru_cache(maxsize=1)
-def _get_cross_encoder() -> CrossEncoder:
-    """
-    Load the cross-encoder model once and cache it for the process lifetime.
-    lru_cache on a module-level function means the model is loaded on the first
-    call and reused on all subsequent calls — no repeated disk reads.
-    """
-    print(f"[reranker] Loading cross-encoder model: {RERANKER_MODEL}")
-    return CrossEncoder(RERANKER_MODEL)
+    rerank_score: float
 
 
 def rerank(
     query: str,
-    candidates: list[dict],  # dicts with at minimum: chunk_id, content, + metadata
+    candidates: list[dict],
     top_k: int = 5,
 ) -> list[RankedChunk]:
-    """
-    Rerank a list of candidate chunks using the cross-encoder.
+    mode = os.environ.get("RERANKER", "none").lower()
 
-    Args:
-        query: The user's question.
-        candidates: List of dicts. Each must have keys:
-            - chunk_id (str)
-            - document_id (str)
-            - content (str)
-            - section_title (str | None)
-            - start_char (int)
-            - end_char (int)
-        top_k: How many to return after reranking.
+    if mode == "crossencoder":
+        return _rerank_crossencoder(query, candidates, top_k)
+    else:
+        return _rerank_passthrough(candidates, top_k)
 
-    Returns:
-        top_k RankedChunk objects sorted by rerank_score descending.
-    """
-    if not candidates:
-        return []
 
-    model = _get_cross_encoder()
+def _rerank_passthrough(candidates: list[dict], top_k: int) -> list[RankedChunk]:
+    """Return candidates as-is (already RRF-sorted), no model needed."""
+    results = []
+    for i, c in enumerate(candidates[:top_k]):
+        results.append(RankedChunk(
+            chunk_id=c["chunk_id"],
+            document_id=c["document_id"],
+            content=c["content"],
+            section_title=c.get("section_title"),
+            start_char=c["start_char"],
+            end_char=c["end_char"],
+            rerank_score=float(top_k - i),  # synthetic descending score
+        ))
+    return results
 
-    # Cross-encoder expects list of (query, passage) string pairs.
+
+def _rerank_crossencoder(query: str, candidates: list[dict], top_k: int) -> list[RankedChunk]:
+    from sentence_transformers import CrossEncoder  # type: ignore
+    global _ce_model
+    if _ce_model is None:
+        print("[reranker] Loading cross-encoder model...")
+        _ce_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
     pairs = [(query, c["content"]) for c in candidates]
+    scores: list[float] = _ce_model.predict(pairs).tolist()
 
-    # predict() returns a numpy array of logit scores, one per pair.
-    # Higher score = cross-encoder thinks the passage is more relevant.
-    scores: list[float] = model.predict(pairs).tolist()
-
-    ranked: list[RankedChunk] = []
-    for chunk, score in zip(candidates, scores):
-        ranked.append(
-            RankedChunk(
-                chunk_id=chunk["chunk_id"],
-                document_id=chunk["document_id"],
-                content=chunk["content"],
-                section_title=chunk.get("section_title"),
-                start_char=chunk["start_char"],
-                end_char=chunk["end_char"],
-                rerank_score=score,
-            )
-        )
-
+    ranked = []
+    for c, score in zip(candidates, scores):
+        ranked.append(RankedChunk(
+            chunk_id=c["chunk_id"],
+            document_id=c["document_id"],
+            content=c["content"],
+            section_title=c.get("section_title"),
+            start_char=c["start_char"],
+            end_char=c["end_char"],
+            rerank_score=score,
+        ))
     ranked.sort(key=lambda r: r.rerank_score, reverse=True)
     return ranked[:top_k]
+
+
+_ce_model = None
