@@ -5,9 +5,9 @@ from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from app.db.client import get_supabase
 from app.ingestion.chunker import chunk_text
 from app.ingestion.embedder import embed_texts
-from unstructured.partition.auto import partition
 
 router = APIRouter()
+
 
 async def process_document(document_id: str, raw_text: str):
     """Background task: chunk → embed → store."""
@@ -47,7 +47,7 @@ async def process_document(document_id: str, raw_text: str):
 
     except Exception as e:
         print(f"❌ Document {document_id} failed:")
-        traceback.print_exc()           # <-- prints the full stack trace to terminal
+        traceback.print_exc()
         try:
             sb.table("documents").update({
                 "status": "failed",
@@ -56,16 +56,19 @@ async def process_document(document_id: str, raw_text: str):
         except Exception as db_err:
             print(f"❌ Also failed to update error status in DB: {db_err}")
 
+
 @router.post("/v1/documents")
 async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.filename.endswith((".pdf", ".md", ".txt")):
         raise HTTPException(400, "Only PDF, Markdown, and text files are supported")
 
-    # Parse text from file
     contents = await file.read()
+
     if file.filename.endswith(".pdf"):
-        # Write to temp file for unstructured
-        import tempfile, os
+        # Lazy import — unstructured is slow to import, only needed for PDFs
+        import tempfile
+        import os
+        from unstructured.partition.auto import partition
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(contents)
             tmp_path = tmp.name
@@ -75,7 +78,6 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     else:
         raw_text = contents.decode("utf-8")
 
-    # Insert document row
     sb = get_supabase()
     document_id = str(uuid.uuid4())
     sb.table("documents").insert({
@@ -85,9 +87,7 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         "status": "pending",
     }).execute()
 
-    # Kick off background processing
     background_tasks.add_task(process_document, document_id, raw_text)
-
     return {"document_id": document_id, "status": "processing"}
 
 
