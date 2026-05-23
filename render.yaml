@@ -1,7 +1,4 @@
-# render.yaml — Render.com deployment config for the FastAPI backend.
-# Set these env vars in the Render dashboard (never commit secrets):
-#   SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY, ALLOWED_ORIGINS
-
+# render.yaml
 services:
   - type: web
     name: rag-grounded-api
@@ -12,7 +9,7 @@ services:
     healthCheckPath: /healthz
     envVars:
       - key: PORT
-        value: "8000"
+        value: "10000"
       - key: LLM_PROVIDER
         value: groq
       - key: ABSTAIN_RERANK_THRESHOLD

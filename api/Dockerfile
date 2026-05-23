@@ -16,10 +16,11 @@ RUN uv sync --frozen --no-dev --python 3.13
 
 COPY app/ ./app/
 
-EXPOSE 8000
+# Render uses port 10000 by default
+EXPOSE 10000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-10000}/healthz')"
 
-# Use shell form so $PORT env var is expanded at runtime
-CMD uv run --python 3.13 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Shell form so $PORT is expanded at runtime
+CMD uv run --python 3.13 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
