@@ -14,8 +14,7 @@ COPY pyproject.toml uv.lock ./
 
 RUN uv sync --frozen --no-dev --python 3.13
 
-# Pre-download ML models at build time so there's no runtime download delay.
-# This adds ~200MB to the image but eliminates cold-start timeouts on Render.
+# Pre-download ML models at build time
 RUN uv run --python 3.13 python -c "\
 from sentence_transformers import SentenceTransformer, CrossEncoder; \
 print('Downloading embedder...'); \
@@ -26,6 +25,9 @@ print('Models ready.')"
 
 COPY app/ ./app/
 
+# Test that the app imports cleanly — this will surface any crash reason in build logs
+RUN uv run --python 3.13 python -c "import app.main; print('App imports OK')"
+
 EXPOSE 10000
 
-CMD uv run --python 3.13 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
+CMD uv run --python 3.13 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000} --log-level debug
