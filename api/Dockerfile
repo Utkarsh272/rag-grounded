@@ -14,13 +14,18 @@ COPY pyproject.toml uv.lock ./
 
 RUN uv sync --frozen --no-dev --python 3.13
 
+# Pre-download ML models at build time so there's no runtime download delay.
+# This adds ~200MB to the image but eliminates cold-start timeouts on Render.
+RUN uv run --python 3.13 python -c "\
+from sentence_transformers import SentenceTransformer, CrossEncoder; \
+print('Downloading embedder...'); \
+SentenceTransformer('all-MiniLM-L6-v2'); \
+print('Downloading reranker...'); \
+CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); \
+print('Models ready.')"
+
 COPY app/ ./app/
 
-# Render uses port 10000 by default
 EXPOSE 10000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-10000}/healthz')"
-
-# Shell form so $PORT is expanded at runtime
 CMD uv run --python 3.13 uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}
