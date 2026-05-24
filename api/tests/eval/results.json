@@ -1,0 +1,238 @@
+{
+  "document_id": "8a0e5f7a-4d91-474a-af0c-712eed58a05e",
+  "eval_set": "Distributed Systems: Foundations and Patterns",
+  "run_at": "2026-05-24T00:15:52.581926",
+  "modes": {
+    "vector": {
+      "recall_at_5": 1.0
+    },
+    "hybrid": {
+      "recall_at_5": 1.0,
+      "answer_accuracy": 0.925,
+      "citation_precision": 1.0
+    }
+  },
+  "abstention_rate": 0.0,
+  "pipeline_details": [
+    {
+      "id": "q01",
+      "question": "What is linearizability and what is its main cost?",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "easy",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "Linearizability, also called strong consistency, guarantees that every read reflects the most recent write, and that all operations appear to execute atomically at a single point in time [1]. A system is linearizable if, for any execution, there exis"
+    },
+    {
+      "id": "q02",
+      "question": "How does causal consistency differ from sequential consistency?",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 2,
+      "generated_preview": "Causal consistency weakens the guarantee further than sequential consistency, as it only requires causally related operations to be seen in the same order by all processes [1]. In contrast, sequential consistency requires all processes to agree on a "
+    },
+    {
+      "id": "q03",
+      "question": "What does the CAP theorem state and what are CP vs AP systems?",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "easy",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 2,
+      "generated_preview": "The CAP theorem states that a distributed system can provide at most two of three properties: Consistency (every read receives the most recent write), Availability (every request receives a non-error response), and Partition tolerance (the system con"
+    },
+    {
+      "id": "q04",
+      "question": "What does the PACELC theorem add to the CAP theorem?",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "The PACELC theorem extends the CAP theorem by noting that even in the absence of partitions, there is always a latency-consistency tradeoff: a system that avoids partitions still must choose between lower latency (by not waiting for all replicas to a"
+    },
+    {
+      "id": "q05",
+      "question": "How does single-leader replication work and what is its main limitation?",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "easy",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "In single-leader replication, one replica is designated as the leader, and all writes go through the leader, which applies them to its local storage and propagates them to followers as a replication log [1]. Followers consume the replication log and "
+    },
+    {
+      "id": "q06",
+      "question": "What is the fundamental challenge of multi-leader replication and how are conflicts resolved?",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "The fundamental challenge of multi-leader replication is write conflicts: if two leaders concurrently update the same record, there is no automatic ordering of which write should win [1]. Conflict resolution strategies include last-write-wins (using "
+    },
+    {
+      "id": "q07",
+      "question": "How does leaderless replication using quorums work?",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "In leaderless replication, any replica can accept writes, and the client sends writes to multiple replicas in parallel, considering the write successful when W replicas acknowledge it [1]. Reads are sent to R replicas in parallel, and the client take"
+    },
+    {
+      "id": "q08",
+      "question": "What is the tradeoff between synchronous and asynchronous replication?",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "In synchronous replication, the leader waits for followers to confirm the write before acknowledging success to the client, which guarantees no data loss on leader failure, but increases write latency [1]. In contrast, asynchronous replication allows"
+    },
+    {
+      "id": "q09",
+      "question": "Describe the two phases of the Paxos consensus algorithm.",
+      "expected_section": "3. Consensus Algorithms",
+      "difficulty": "hard",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "The Paxos consensus algorithm operates in two phases: Phase 1 (Prepare/Promise) and Phase 2 (Accept/Commit) [1]. In Phase 1, a proposer sends a prepare message with a proposal number n to a quorum of acceptors, and each acceptor promises not to accep"
+    },
+    {
+      "id": "q10",
+      "question": "What are the three subproblems Raft decomposes consensus into and what is the Leader Completeness Property?",
+      "expected_section": "3. Consensus Algorithms",
+      "difficulty": "hard",
+      "abstained": false,
+      "accuracy": 0.5,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "Raft decomposes consensus into three subproblems: leader election, log replication, and safety [1]. The Leader Completeness Property is a key invariant in Raft, which states that if a log entry is committed in a given term, it will be present in the "
+    },
+    {
+      "id": "q11",
+      "question": "What is Byzantine fault tolerance and how does it differ from crash fault tolerance?",
+      "expected_section": "3. Consensus Algorithms",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 0.5,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "Byzantine fault tolerance (BFT) addresses a harder problem: consensus in the presence of nodes that may behave arbitrarily (send incorrect or conflicting messages, collude, lie) [1]. This differs from crash fault tolerance, which is addressed by algo"
+    },
+    {
+      "id": "q12",
+      "question": "What is the in-doubt window problem in Two-Phase Commit?",
+      "expected_section": "4. Distributed Transactions and Concurrency Control",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 2,
+      "generated_preview": "The in-doubt window problem in Two-Phase Commit occurs when the coordinator crashes after Phase 1 but before Phase 2, leaving participants in an uncertain state, as they cannot commit or abort without the coordinator's decision and must wait indefini"
+    },
+    {
+      "id": "q13",
+      "question": "How does the Saga pattern differ from distributed transactions and what is its main tradeoff?",
+      "expected_section": "4. Distributed Transactions and Concurrency Control",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 2,
+      "generated_preview": "The Saga pattern differs from distributed transactions in that it avoids 2PC by breaking a long-running transaction into a sequence of local transactions, each with a compensating transaction that undoes its effects [1]. This is in contrast to distri"
+    },
+    {
+      "id": "q14",
+      "question": "How does MVCC eliminate read-write conflicts and what is its storage tradeoff?",
+      "expected_section": "4. Distributed Transactions and Concurrency Control",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "MVCC eliminates read-write conflicts entirely by maintaining multiple versions of each data item, one for each transaction that has modified it, allowing readers to read the version that was current at the start of their transaction without blocking "
+    },
+    {
+      "id": "q15",
+      "question": "What is consistent hashing and why are virtual nodes used?",
+      "expected_section": "5. Distributed Storage and Data Partitioning",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "Consistent hashing is a variant of hash partitioning that minimizes data movement when nodes are added or removed, in which both nodes and keys are hashed onto a ring, and each key is assigned to the first node clockwise from its position on the ring"
+    },
+    {
+      "id": "q16",
+      "question": "What are LSM trees and what are their read and write amplification tradeoffs?",
+      "expected_section": "5. Distributed Storage and Data Partitioning",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 2,
+      "generated_preview": "LSM trees (Log-Structured Merge-trees) are a write-optimized storage engine used by RocksDB, Cassandra, LevelDB, and HBase [1]. They achieve very high write throughput by writing to an in-memory buffer and a write-ahead log, and then flushing to disk"
+    },
+    {
+      "id": "q17",
+      "question": "What is the purpose of Bloom filters in storage engines?",
+      "expected_section": "5. Distributed Storage and Data Partitioning",
+      "difficulty": "easy",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "Bloom filters are a probabilistic data structure used in LSM-based storage engines to avoid unnecessary disk reads [1]. They check if a key is present in an SSTable before searching for it, and if the filter says the key is absent, the SSTable is ski"
+    },
+    {
+      "id": "q18",
+      "question": "What are the three pillars of observability and what distinct purpose does each serve?",
+      "expected_section": "6. Observability and Distributed Tracing",
+      "difficulty": "easy",
+      "abstained": false,
+      "accuracy": 0.5,
+      "citation_precision": 1.0,
+      "num_citations": 2,
+      "generated_preview": "The three pillars of observability are metrics, logs, and traces [1][2]. Metrics serve a distinct purpose as numerical measurements aggregated over time, answering questions like \"what is the p99 latency of my API endpoint?\" and \"how many requests pe"
+    },
+    {
+      "id": "q19",
+      "question": "What is the RED method and how does it differ from the USE method?",
+      "expected_section": "6. Observability and Distributed Tracing",
+      "difficulty": "medium",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 1,
+      "generated_preview": "The RED method is a framework for defining key metrics every service should expose, which includes the rate of requests per second, the rate of errors per second, and the distribution of request durations [1]. It was popularized by Tom Wilkie at Weav"
+    },
+    {
+      "id": "q20",
+      "question": "What is the difference between an SLI, SLO, and SLA, and what is an error budget?",
+      "expected_section": "6. Observability and Distributed Tracing",
+      "difficulty": "easy",
+      "abstained": false,
+      "accuracy": 1.0,
+      "citation_precision": 1.0,
+      "num_citations": 2,
+      "generated_preview": "A Service Level Indicator (SLI) is a quantitative measure of service behavior, such as availability or latency [1]. A Service Level Objective (SLO) is a target value for an SLI, such as \"99.9% of requests complete within 200ms\" [1]. An SLA (Service L"
+    }
+  ]
+}

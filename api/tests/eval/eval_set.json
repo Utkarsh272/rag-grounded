@@ -1,0 +1,147 @@
+{
+  "document_title": "Distributed Systems: Foundations and Patterns",
+  "document_file": "distributed_systems_rag_eval.md",
+  "description": "20 Q&A pairs for evaluating RAG recall, answer accuracy, and citation precision across 6 sections.",
+  "questions": [
+    {
+      "id": "q01",
+      "question": "What is linearizability and what is its main cost?",
+      "expected_answer": "Linearizability (strong consistency) guarantees that every read reflects the most recent write and all operations appear to execute atomically at a single point in time. Its main cost is that it requires coordination between replicas on every write, increasing latency and reducing availability under network partitions.",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "easy"
+    },
+    {
+      "id": "q02",
+      "question": "How does causal consistency differ from sequential consistency?",
+      "expected_answer": "Sequential consistency requires all processes to agree on a global ordering of all operations (though not necessarily real-time order). Causal consistency only requires causally related operations to be seen in the same order — concurrent operations with no causal relationship may be seen in different orders by different processes. Causal consistency is cheaper because it does not require global coordination.",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q03",
+      "question": "What does the CAP theorem state and what are CP vs AP systems?",
+      "expected_answer": "The CAP theorem states a distributed system can provide at most two of: Consistency, Availability, and Partition tolerance. Since partitions are inevitable, the real choice is between CP systems (consistent but potentially unavailable during partitions, e.g. HBase, Zookeeper) and AP systems (available but potentially inconsistent, e.g. Cassandra, CouchDB).",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "easy"
+    },
+    {
+      "id": "q04",
+      "question": "What does the PACELC theorem add to the CAP theorem?",
+      "expected_answer": "PACELC extends CAP by noting that even without partitions, there is always a latency-consistency tradeoff. A system avoiding partitions still must choose between lower latency (not waiting for all replicas to acknowledge) and stronger consistency (waiting for all replicas). This captures the everyday engineering reality more completely than CAP.",
+      "expected_section": "1. Consistency Models",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q05",
+      "question": "How does single-leader replication work and what is its main limitation?",
+      "expected_answer": "In single-leader replication, one replica is designated leader and all writes go through it. The leader applies writes locally and propagates them to followers via a replication log. The main limitation is that the leader is a write bottleneck and single point of failure — leader failure requires a failover process that must detect failure, elect a new leader, and prevent the old leader from rejoining (split-brain prevention).",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "easy"
+    },
+    {
+      "id": "q06",
+      "question": "What is the fundamental challenge of multi-leader replication and how are conflicts resolved?",
+      "expected_answer": "The fundamental challenge is write conflicts: if two leaders concurrently update the same record, there is no automatic ordering of which write wins. Conflict resolution strategies include last-write-wins (using timestamps, unreliable due to clock skew), application-level conflict resolution (the application receives both conflicting versions and merges them), and CRDTs (data structures algebraically designed to merge without conflicts).",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q07",
+      "question": "How does leaderless replication using quorums work?",
+      "expected_answer": "In leaderless replication, any replica can accept writes. The client sends writes to multiple replicas in parallel and considers the write successful when W replicas acknowledge it. Reads are sent to R replicas in parallel and the client takes the most recent value. The system provides quorum-based consistency when W + R > N (where N is total replica count). DynamoDB, Cassandra, and Riak use this model.",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q08",
+      "question": "What is the tradeoff between synchronous and asynchronous replication?",
+      "expected_answer": "In synchronous replication, the leader waits for followers to confirm the write before acknowledging the client, guaranteeing no data loss on leader failure but increasing write latency. In asynchronous replication, the leader acknowledges immediately after writing locally and propagates in the background, minimizing latency but risking data loss if the leader fails before replication completes. Semi-synchronous replication (used by MySQL and PostgreSQL) keeps one synchronous follower and the rest asynchronous.",
+      "expected_section": "2. Replication Strategies",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q09",
+      "question": "Describe the two phases of the Paxos consensus algorithm.",
+      "expected_answer": "In Phase 1 (Prepare/Promise), a proposer sends a prepare message with proposal number n to a quorum of acceptors. Each acceptor promises not to accept proposals numbered less than n and returns the highest-numbered proposal it has already accepted. In Phase 2 (Accept/Commit), the proposer sends an accept message with the value from the highest previously accepted proposal (or its own value if none) and number n. Once a quorum of acceptors accept, the value is chosen.",
+      "expected_section": "3. Consensus Algorithms",
+      "difficulty": "hard"
+    },
+    {
+      "id": "q10",
+      "question": "What are the three subproblems Raft decomposes consensus into and what is the Leader Completeness Property?",
+      "expected_answer": "Raft decomposes consensus into leader election, log replication, and safety. The Leader Completeness Property states that if a log entry is committed in a given term, it will be present in the logs of all leaders for all higher-numbered terms — ensuring committed entries are never lost. Raft is used in etcd, CockroachDB, TiKV, and Consul.",
+      "expected_section": "3. Consensus Algorithms",
+      "difficulty": "hard"
+    },
+    {
+      "id": "q11",
+      "question": "What is Byzantine fault tolerance and how does it differ from crash fault tolerance?",
+      "expected_answer": "Byzantine fault tolerance (BFT) handles nodes that may behave arbitrarily — sending incorrect or conflicting messages, colluding, or lying. Crash fault tolerance only handles nodes that stop responding. BFT requires 3f+1 nodes to tolerate f Byzantine faults. BFT algorithms have O(n²) message complexity, making them significantly more expensive than crash fault tolerant algorithms like Paxos and Raft. BFT is used primarily in blockchain systems and safety-critical systems.",
+      "expected_section": "3. Consensus Algorithms",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q12",
+      "question": "What is the in-doubt window problem in Two-Phase Commit?",
+      "expected_answer": "The in-doubt window is the fundamental blocking problem in 2PC: if the coordinator crashes after Phase 1 (after participants have voted yes and logged their decision) but before Phase 2 (before sending commit or abort), participants are left in an uncertain state. They cannot commit or abort without the coordinator's decision and must wait indefinitely. This is why 2PC is called a blocking protocol.",
+      "expected_section": "4. Distributed Transactions and Concurrency Control",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q13",
+      "question": "How does the Saga pattern differ from distributed transactions and what is its main tradeoff?",
+      "expected_answer": "The Saga pattern breaks a long-running transaction into a sequence of local transactions, each with a compensating transaction that undoes its effects. If a step fails, previously completed steps are rolled back via compensating transactions. Unlike distributed transactions (ACID), Sagas are eventually consistent — intermediate states are visible to other processes. The tradeoff is increased application complexity: developers must define compensating transactions for every step and handle compensating transaction failures.",
+      "expected_section": "4. Distributed Transactions and Concurrency Control",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q14",
+      "question": "How does MVCC eliminate read-write conflicts and what is its storage tradeoff?",
+      "expected_answer": "MVCC maintains multiple versions of each data item. Readers read the version current at the start of their transaction (snapshot isolation) without blocking writers. Writers create a new version without overwriting the old one, so reads never block writes and writes never block reads. The tradeoff is storage overhead (multiple versions must be retained until no reader can see them) and the need for a garbage collection process to reclaim old versions. PostgreSQL, MySQL InnoDB, CockroachDB, and Spanner use MVCC.",
+      "expected_section": "4. Distributed Transactions and Concurrency Control",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q15",
+      "question": "What is consistent hashing and why are virtual nodes used?",
+      "expected_answer": "Consistent hashing maps both nodes and keys onto a ring using a hash function. Each key is assigned to the first node clockwise from its position on the ring. When a node is added or removed, only the keys in the affected portion of the ring are reassigned, minimizing data movement. Virtual nodes (vnodes) assign each physical node multiple positions on the ring, improving load balancing by distributing a departing node's keys across all remaining nodes rather than just the next one.",
+      "expected_section": "5. Distributed Storage and Data Partitioning",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q16",
+      "question": "What are LSM trees and what are their read and write amplification tradeoffs?",
+      "expected_answer": "LSM (Log-Structured Merge) trees are write-optimized storage engines where all writes go to an in-memory memtable and write-ahead log, then are flushed to immutable SSTables on disk. Background compaction merges SSTables. They achieve high write throughput via sequential disk writes. The tradeoffs are read amplification (reads may check multiple SSTables) and write amplification (a key may be rewritten multiple times during compaction). RocksDB, Cassandra, LevelDB, and HBase use LSM trees.",
+      "expected_section": "5. Distributed Storage and Data Partitioning",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q17",
+      "question": "What is the purpose of Bloom filters in storage engines?",
+      "expected_answer": "Bloom filters are probabilistic data structures used in LSM-based storage engines to avoid unnecessary disk reads. Before searching an SSTable for a key, the engine checks the Bloom filter. If the filter says the key is absent, the SSTable is skipped entirely. Bloom filters have a tunable false positive rate (may incorrectly report a key as present) but never produce false negatives. This dramatically reduces read amplification for lookups of non-existent keys.",
+      "expected_section": "5. Distributed Storage and Data Partitioning",
+      "difficulty": "easy"
+    },
+    {
+      "id": "q18",
+      "question": "What are the three pillars of observability and what distinct purpose does each serve?",
+      "expected_answer": "The three pillars are metrics, logs, and traces. Metrics are numerical measurements aggregated over time — efficient to store and ideal for alerting and dashboards (e.g. p99 latency, requests/sec). Structured logs are machine-readable per-event records, queryable by log management systems — ideal for debugging specific incidents. Distributed traces track a request across multiple services, recording time spent in each and the relationships between operations — essential for understanding latency in distributed systems.",
+      "expected_section": "6. Observability and Distributed Tracing",
+      "difficulty": "easy"
+    },
+    {
+      "id": "q19",
+      "question": "What is the RED method and how does it differ from the USE method?",
+      "expected_answer": "The RED method (Rate, Errors, Duration) defines the key metrics every service should expose: rate of requests per second, rate of errors per second, and distribution of request durations. It focuses on service-level behavior from the user's perspective. The USE method (Utilization, Saturation, Errors) applies to infrastructure resources: CPU utilization, queue saturation, and error rates on disks and network interfaces. RED is service-oriented; USE is resource-oriented.",
+      "expected_section": "6. Observability and Distributed Tracing",
+      "difficulty": "medium"
+    },
+    {
+      "id": "q20",
+      "question": "What is the difference between an SLI, SLO, and SLA, and what is an error budget?",
+      "expected_answer": "An SLI (Service Level Indicator) is a quantitative measure of service behavior, such as the fraction of successful requests. An SLO (Service Level Objective) is a target value for an SLI, such as 99.9% availability. An SLA (Service Level Agreement) is a contractual commitment to an SLO with financial consequences for violations. An error budget is the allowed amount of downtime or errors within an SLO period — if exhausted, new feature launches are paused until reliability is restored.",
+      "expected_section": "6. Observability and Distributed Tracing",
+      "difficulty": "easy"
+    }
+  ]
+}
