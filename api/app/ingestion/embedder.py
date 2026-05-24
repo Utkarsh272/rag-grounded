@@ -1,35 +1,62 @@
 # api/app/ingestion/embedder.py
 """
-Embedder — local sentence-transformers, loaded in a background thread at startup.
-
-The model loads AFTER uvicorn binds to the port, so Render's health check
-passes immediately. The first actual embedding request waits for the model
-to finish loading (via threading.Event), then proceeds normally.
+Embedder — Jina AI jina-embeddings-v3 API.
+1024-dim vectors, free tier (1M tokens on signup), no local model needed.
+Requires JINA_API_KEY env var.
 """
 from __future__ import annotations
 
-import threading
-from sentence_transformers import SentenceTransformer
-
-_model: SentenceTransformer | None = None
-_ready = threading.Event()
+import os
+import httpx
 
 
-def _load():
-    global _model
-    print("[embedder] Loading all-MiniLM-L6-v2 in background...")
-    _model = SentenceTransformer("all-MiniLM-L6-v2")
-    _ready.set()
-    print("[embedder] Model ready.")
-
-
-def start_background_load():
-    """Call once at app startup. Returns immediately; model loads in background."""
-    t = threading.Thread(target=_load, daemon=True)
-    t.start()
+JINA_MODEL = "jina-embeddings-v3"
+JINA_URL = "https://api.jina.ai/v1/embeddings"
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed texts. Blocks until model is ready if still loading."""
-    _ready.wait()  # waits here only if model hasn't finished loading yet
-    return _model.encode(texts, convert_to_numpy=True).tolist()
+    api_key = os.environ.get("JINA_API_KEY")
+    if not api_key:
+        raise RuntimeError("JINA_API_KEY not set in environment")
+
+    response = httpx.post(
+        JINA_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": JINA_MODEL,
+            "input": texts,
+            "task": "retrieval.passage",  # optimised for document retrieval
+        },
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    data = response.json()
+    # Sort by index to guarantee order matches input
+    embeddings = sorted(data["data"], key=lambda x: x["index"])
+    return [e["embedding"] for e in embeddings]
+
+
+def embed_query(text: str) -> list[float]:
+    """Embed a single query string with the retrieval.query task type."""
+    api_key = os.environ.get("JINA_API_KEY")
+    if not api_key:
+        raise RuntimeError("JINA_API_KEY not set in environment")
+
+    response = httpx.post(
+        JINA_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": JINA_MODEL,
+            "input": [text],
+            "task": "retrieval.query",  # different task type for queries
+        },
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()["data"][0]["embedding"]

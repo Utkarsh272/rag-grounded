@@ -1,4 +1,5 @@
 # api/app/routes/documents.py
+import os
 import uuid
 import traceback
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
@@ -10,7 +11,7 @@ router = APIRouter()
 
 
 async def process_document(document_id: str, raw_text: str):
-    """Background task: chunk → embed → store."""
+    """Background task: chunk → embed (Jina API) → store."""
     sb = get_supabase()
     try:
         sb.table("documents").update({"status": "processing"}).eq("id", document_id).execute()
@@ -26,7 +27,6 @@ async def process_document(document_id: str, raw_text: str):
             batch = chunks[i:i + batch_size]
             print(f"🔢 Embedding batch {i // batch_size + 1} ({len(batch)} chunks)...")
             embeddings = embed_texts([c.content for c in batch])
-
             rows = [
                 {
                     "document_id": document_id,
@@ -40,7 +40,7 @@ async def process_document(document_id: str, raw_text: str):
                 for c, emb in zip(batch, embeddings)
             ]
             sb.table("chunks").insert(rows).execute()
-            print(f"✅ Batch {i // batch_size + 1} inserted into DB")
+            print(f"✅ Batch {i // batch_size + 1} inserted")
 
         sb.table("documents").update({"status": "complete"}).eq("id", document_id).execute()
         print(f"✅ Document {document_id} fully processed: {len(chunks)} chunks")
@@ -65,9 +65,7 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     contents = await file.read()
 
     if file.filename.endswith(".pdf"):
-        # Lazy import — unstructured is slow to import, only needed for PDFs
         import tempfile
-        import os
         from unstructured.partition.auto import partition
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(contents)
