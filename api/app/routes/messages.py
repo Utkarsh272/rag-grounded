@@ -5,31 +5,23 @@ Message endpoint with Server-Sent Events streaming.
 POST /v1/conversations/{id}/messages
   Body: {"question": "..."}
 
-Pipeline (Day 5 update):
+Pipeline:
   1. Save user message
-  2. Hybrid retrieve top-5 chunks
-  3. Pre-LLM abstention check (verification/abstention.py)
-     → if weak retrieval: stream abstain event, save message, done
-  4. Build prompt + call LLM
-  5. Parse [SOURCE_X] citations (generation/citation_parser.py)
-     → if LLM returned INSUFFICIENT_INFO: abstain path
-  6. Score claims for confidence (verification/confidence.py)
-  7. Stream answer word-by-word (token events)
-  8. Stream citation metadata (citation events)
-  9. Save assistant message with citations + claim_scores + abstained flag
-  10. Stream complete event
-
-SSE stream format:
-  event: token      data: {"text": "..."}
-  event: citation   data: {"id", "chunk_id", "section", "start_char", "end_char", "text"}
-  event: complete   data: {"message_id", "answer", "citations", "claim_scores",
-                           "abstained", "retrieval_meta"}
-  event: error      data: {"detail": "..."}
+  2. Hybrid retrieve top-5 chunks       ← timed: time_retrieval("hybrid")
+  3. Pre-LLM abstention check           ← records: record_abstention(reason)
+  4. Build prompt + call LLM            ← timed: time_llm(provider, "answer")
+  5. Parse [SOURCE_X] citations
+  6. Score claims for confidence        ← timed: time_llm(provider, "claims") + time_embedding("claims")
+  7. Stream answer word-by-word
+  8. Stream citation metadata
+  9. Save assistant message
+  10. Stream complete event             ← records: record_request(status, elapsed)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from fastapi import APIRouter, HTTPException
@@ -41,10 +33,19 @@ from app.generation.citation_parser import parse_citations
 from app.generation.llm import generate
 from app.generation.prompt import build_system_prompt, build_user_prompt
 from app.retrieval.hybrid import hybrid_retrieve
+from app.telemetry.metrics import (
+    record_abstention,
+    record_request,
+    time_embedding,
+    time_llm,
+    time_retrieval,
+)
 from app.verification.abstention import should_abstain
 from app.verification.confidence import score_claims
 
 router = APIRouter()
+
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 
 
 class AskRequest(BaseModel):
@@ -52,18 +53,15 @@ class AskRequest(BaseModel):
 
 
 def _sse(event: str, data: dict) -> str:
-    """Format a single SSE message."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 @router.post("/v1/conversations/{conversation_id}/messages")
 async def ask(conversation_id: str, body: AskRequest):
-    """Ask a question in a conversation. Returns an SSE stream."""
     if not body.question.strip():
         raise HTTPException(status_code=400, detail="Question must not be blank.")
 
     sb = get_supabase()
-
     conv = (
         sb.table("conversations")
         .select("id, document_id")
@@ -76,20 +74,24 @@ async def ask(conversation_id: str, body: AskRequest):
     document_id = conv.data[0]["document_id"]
 
     async def stream():
+        request_start = time.perf_counter()
+        final_status = "success"
+
         try:
-            # ── 1. Save user message ─────────────────────────────────────────
+            # ── 1. Save user message ──────────────────────────────────────────
             sb.table("messages").insert({
                 "conversation_id": conversation_id,
                 "role": "user",
                 "content": body.question,
             }).execute()
 
-            # ── 2. Retrieve relevant chunks ──────────────────────────────────
-            chunks = hybrid_retrieve(
-                query=body.question,
-                top_k=5,
-                document_id=document_id,
-            )
+            # ── 2. Retrieve relevant chunks ───────────────────────────────────
+            with time_retrieval("hybrid"):
+                chunks = hybrid_retrieve(
+                    query=body.question,
+                    top_k=5,
+                    document_id=document_id,
+                )
 
             if not chunks:
                 yield _sse("error", {"detail": "No relevant content found in this document."})
@@ -108,6 +110,9 @@ async def ask(conversation_id: str, body: AskRequest):
             abstain, reason = should_abstain(chunks=chunks, query=body.question)
 
             if abstain:
+                record_abstention("rerank_threshold")
+                final_status = "abstained"
+
                 abstain_answer = (
                     "I don't have enough information in this document to answer "
                     f"your question confidently. {reason}"
@@ -124,7 +129,6 @@ async def ask(conversation_id: str, body: AskRequest):
 
                 message_id = saved.data[0]["id"] if saved.data else None
 
-                # Stream the abstain answer word-by-word so the UI looks consistent
                 for word in abstain_answer.split(" "):
                     yield _sse("token", {"text": word + " "})
                     time.sleep(0.02)
@@ -142,20 +146,27 @@ async def ask(conversation_id: str, body: AskRequest):
             # ── 4. Build prompt + call LLM ────────────────────────────────────
             system_prompt = build_system_prompt(chunks)
             user_prompt = build_user_prompt(body.question)
-            raw_output = generate(system=system_prompt, user=user_prompt)
 
-            # ── 5. Parse citations (also handles post-LLM INSUFFICIENT_INFO) ──
+            with time_llm(LLM_PROVIDER, "answer"):
+                raw_output = generate(system=system_prompt, user=user_prompt)
+
+            # ── 5. Parse citations ────────────────────────────────────────────
             parsed = parse_citations(raw_output, chunks)
 
-            # ── 6. Score claims for confidence ────────────────────────────────
-            # Skip scoring if the LLM abstained — there are no claims to score.
+            if parsed.abstained:
+                record_abstention("insufficient_info")
+                final_status = "abstained"
+
+            # ── 6. Score claims ───────────────────────────────────────────────
             claim_scores = []
             if not parsed.abstained:
-                scored = score_claims(
-                    answer=parsed.answer,
-                    citations=parsed.citations,
-                    chunks=chunks,
-                )
+                with time_embedding("claims"):
+                    with time_llm(LLM_PROVIDER, "claims"):
+                        scored = score_claims(
+                            answer=parsed.answer,
+                            citations=parsed.citations,
+                            chunks=chunks,
+                        )
                 claim_scores = [
                     {
                         "claim": cs.claim,
@@ -206,7 +217,7 @@ async def ask(conversation_id: str, body: AskRequest):
 
             message_id = saved.data[0]["id"] if saved.data else None
 
-            # ── 10. Send complete event ───────────────────────────────────────
+            # ── 10. Stream complete event ─────────────────────────────────────
             yield _sse("complete", {
                 "message_id": message_id,
                 "answer": parsed.answer,
@@ -219,13 +230,14 @@ async def ask(conversation_id: str, body: AskRequest):
         except Exception as exc:
             import traceback
             traceback.print_exc()
+            final_status = "error"
             yield _sse("error", {"detail": str(exc)})
+
+        finally:
+            record_request(final_status, time.perf_counter() - request_start)
 
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

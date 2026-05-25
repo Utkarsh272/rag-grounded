@@ -2,7 +2,7 @@
 
 > Production-grade document Q&A: every answer cites exact source spans, every claim carries a confidence score, and the system says "I don't know" when retrieval is weak.
 
-[Live demo](https://rag-rounded.vercel.app) · [Architecture](#architecture) · [Eval results](#eval-results) · [Design decisions](#key-design-decisions)
+[**Live demo**](https://rag-rounded.vercel.app) · [Architecture](#architecture) · [Eval results](#eval-results) · [Design decisions](DESIGN.md) · [API](#api-endpoints)
 
 ---
 
@@ -11,12 +11,12 @@
 Most RAG demos retrieve chunks and dump them into an LLM prompt. This project goes further:
 
 - **Inline citations** — every claim links back to the exact source span in the original document, not just the document name
-- **Confidence scoring** — each claim is scored independently; low-confidence claims are flagged in the UI
-- **Two-layer abstention** — pre-LLM gate (retrieval signal) + post-LLM gate (INSUFFICIENT_INFO sentinel); system refuses to hallucinate
-- **Hybrid retrieval** — vector search + BM25 fused via Reciprocal Rank Fusion, then reranked with a cross-encoder
-- **SSE streaming** — answers stream word-by-word; citation metadata follows in the same stream
+- **Confidence scoring** — each claim is scored independently via embedding cosine similarity; low-confidence claims are flagged in the UI
+- **Two-layer abstention** — pre-LLM gate (cross-encoder rerank signal) + post-LLM gate (`INSUFFICIENT_INFO` sentinel); the system refuses to hallucinate rather than guessing
+- **Hybrid retrieval** — vector search + BM25 fused via Reciprocal Rank Fusion, then reranked with a cross-encoder; beats vector-only on recall
+- **SSE streaming** — answers stream word-by-word; citation metadata arrives in the same stream before the complete event
 - **Full chat UI** — dark-mode interface with drag-drop upload, document list, streaming chat, clickable citation chips, and a slide-in source panel
-- **Observability** — Prometheus metrics (`/metrics`) + OpenTelemetry tracing + readiness probe (`/readyz`)
+- **Observability** — Prometheus metrics (`/metrics`), OpenTelemetry tracing, readiness probe (`/readyz`), pre-built Grafana dashboard
 
 ---
 
@@ -31,11 +31,11 @@ Evaluated on a 20-question ground-truth set covering 6 distributed systems topic
 | Citation precision | — | 1.000 |
 | Abstention rate | — | 0.0% |
 
-**Recall@5**: fraction of questions where the correct source section appeared in the top-5 retrieved chunks.
-**Answer accuracy**: Groq Llama 3.3 70B used as judge, scoring each generated answer 0 / 0.5 / 1 against ground truth.
-**Citation precision**: fraction of cited chunks whose section matched the expected source section.
+**Recall@5** — fraction of questions where the correct source section appeared in top-5 retrieved chunks.
+**Answer accuracy** — Groq Llama 3.3 70B used as judge, scoring each generated answer 0 / 0.5 / 1 against ground truth.
+**Citation precision** — fraction of cited chunks whose section matched the expected source section.
 
-Live results endpoint: `GET /v1/eval/results`
+Eval document: [`distributed_systems_rag_eval.md`](distributed_systems_rag_eval.md) · Live results: `GET /v1/eval/results`
 
 ---
 
@@ -53,14 +53,14 @@ graph LR
     API --> Hybrid[Hybrid Retriever]
     Hybrid -->|vector cosine| PG
     Hybrid -->|BM25 tsvector| PG
-    Hybrid --> RRF[RRF Fusion]
+    Hybrid --> RRF[RRF Fusion k=60]
     RRF --> Reranker[Cross-Encoder Reranker]
     Reranker --> Abstention[Pre-LLM Abstention Gate]
-    Abstention -->|pass| LLM[Groq Llama 3.3 70B / Claude Sonnet]
-    Abstention -->|fail| SSE
+    Abstention -->|fail| SSE[SSE Stream]
+    Abstention -->|pass| LLM[Groq Llama 3.3 70B]
     LLM --> CitParser[Citation Parser]
     CitParser --> Confidence[Claim Confidence Scorer]
-    Confidence --> SSE[SSE Stream]
+    Confidence --> SSE
     SSE --> UI
 ```
 
@@ -70,18 +70,18 @@ graph LR
 
 | Layer | Choice | Why |
 |---|---|---|
-| Frontend | Next.js 14 + TypeScript + Tailwind + shadcn/ui | Modern, type-safe |
+| Frontend | Next.js 14 + TypeScript + Tailwind + shadcn/ui | Modern, type-safe, App Router |
 | Backend | Python 3.13 + FastAPI + Pydantic | Best AI/ML ecosystem |
-| Vector DB | pgvector on Supabase (free) | No Pinecone cost |
-| Embeddings | Jina AI `jina-embeddings-v3` (1024-dim, free API) | Zero RAM on server, 1M tokens free |
+| Vector DB | pgvector on Supabase (free tier) | No Pinecone cost; pgvector is production-grade |
+| Embeddings | Jina AI `jina-embeddings-v3` (1024-dim) | Zero RAM on server, 1M tokens free, asymmetric retrieval support |
 | LLM (dev) | Groq Llama 3.3 70B | Free tier, ~2s latency |
-| LLM (demo) | Anthropic Claude Sonnet | Switched via `LLM_PROVIDER` env var |
-| Doc parsing | `unstructured` | Production-grade PDF/MD/TXT parsing |
-| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Free, runs on CPU |
-| Streaming | Server-Sent Events (SSE) | Unidirectional, no WebSocket overhead |
-| Metrics | Prometheus (`prometheus-client`) + `GET /metrics` | RED method per pipeline stage |
-| Tracing | OpenTelemetry SDK (console exporter, OTLP-ready) | Vendor-neutral, Jaeger/Grafana compatible |
-| Hosting | Vercel (frontend) + Render (backend, Docker) | Free tier |
+| LLM (demo) | Anthropic Claude Sonnet | Swapped via `LLM_PROVIDER` env var |
+| Doc parsing | `unstructured` | Production-grade PDF/MD/TXT parsing with structure preservation |
+| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Free, runs on CPU, improves precision over bi-encoder |
+| Streaming | Server-Sent Events (SSE) | Unidirectional, no WebSocket overhead, native browser support |
+| Metrics | `prometheus-client` + `GET /metrics` | RED method per pipeline stage, Grafana-ready |
+| Tracing | OpenTelemetry SDK (console / OTLP exporter) | Vendor-neutral, Jaeger/Grafana Cloud compatible |
+| Hosting | Vercel (frontend) + Render (backend, Dockerized) | Both free tier |
 
 ---
 
@@ -89,52 +89,56 @@ graph LR
 
 ```
 /rag-grounded
-├── distributed_systems_rag_eval.md   # Eval document (6 sections, 20 Q&A pairs)
-├── /api                              # Python 3.13 + FastAPI backend
+├── distributed_systems_rag_eval.md     # 6-section eval document (upload this for eval)
+├── docker-compose.observability.yml    # Prometheus + Grafana local stack
+├── prometheus/prometheus.yml           # Scrape config
+├── grafana/dashboards/rag.json         # Pre-built Grafana dashboard
+│
+├── /api                                # Python 3.13 + FastAPI backend
 │   ├── Dockerfile
+│   ├── pyproject.toml
 │   └── /app
-│       ├── main.py                   # FastAPI app, CORS, /metrics, /readyz, /healthz
+│       ├── main.py                     # App entrypoint: CORS, /metrics, /healthz, /readyz
 │       ├── /routes
-│       │   ├── documents.py          # Upload, list, status + background ingestion
-│       │   ├── search.py             # Search (?mode=vector|hybrid|compare)
-│       │   ├── conversations.py      # Create / list / get conversations
-│       │   ├── messages.py           # Ask question → full pipeline → SSE stream
-│       │   └── eval.py               # GET /v1/eval/results
+│       │   ├── documents.py            # Upload + background ingestion (instrumented)
+│       │   ├── search.py               # GET /v1/search ?mode=vector|hybrid|compare
+│       │   ├── conversations.py        # Conversation CRUD
+│       │   ├── messages.py             # Full pipeline → SSE stream (instrumented)
+│       │   └── eval.py                 # GET /v1/eval/results
 │       ├── /ingestion
-│       │   ├── chunker.py            # Structure-aware chunker with char offsets
-│       │   └── embedder.py           # Jina AI API embedder (1024-dim)
+│       │   ├── chunker.py              # Structure-aware chunker with char offsets
+│       │   └── embedder.py             # Jina AI API (1024-dim, passage/query task types)
 │       ├── /retrieval
-│       │   ├── vector.py             # pgvector cosine similarity search
-│       │   ├── bm25.py               # Postgres tsvector full-text search
-│       │   ├── reranker.py           # Cross-encoder reranker
-│       │   └── hybrid.py             # RRF fusion: vector + BM25 → rerank → top-5
+│       │   ├── vector.py               # pgvector cosine similarity
+│       │   ├── bm25.py                 # Postgres tsvector full-text search
+│       │   ├── reranker.py             # Cross-encoder reranker
+│       │   └── hybrid.py               # RRF fusion → rerank → top-5
 │       ├── /generation
-│       │   ├── llm.py                # Groq + Anthropic client, swapped via env var
-│       │   ├── prompt.py             # System prompt with [SOURCE_X] citation format
-│       │   └── citation_parser.py    # Parse [SOURCE_X] tokens → citation objects
+│       │   ├── llm.py                  # Groq + Anthropic client
+│       │   ├── prompt.py               # [SOURCE_X] citation injection prompt
+│       │   └── citation_parser.py      # Parse [SOURCE_X] → citation objects
 │       ├── /verification
-│       │   ├── abstention.py         # Pre-LLM gate: rerank score + keyword overlap
-│       │   └── confidence.py         # Per-claim scoring via embedding cosine similarity
+│       │   ├── abstention.py           # Pre-LLM gate: rerank score + Jaccard
+│       │   └── confidence.py           # Per-claim cosine confidence scoring
 │       ├── /telemetry
-│       │   ├── otel.py               # OpenTelemetry setup (console / OTLP)
-│       │   └── metrics.py            # Prometheus counters + histograms (RED method)
+│       │   ├── otel.py                 # OpenTelemetry setup (console / OTLP)
+│       │   └── metrics.py              # Prometheus counters + histograms
 │       └── /db
-│           └── client.py             # Supabase client
-├── /tests
-│   └── /eval
-│       ├── eval_set.json             # 20 ground-truth Q&A pairs
-│       ├── run_eval.py               # Eval harness script
-│       └── results.json              # Latest eval run output
-└── /web                              # Next.js 14 frontend
+│           └── client.py               # Supabase client
+│
+├── /tests/eval
+│   ├── eval_set.json                   # 20 Q&A ground-truth pairs
+│   ├── run_eval.py                     # Eval harness (recall@5, accuracy, citation precision)
+│   └── results.json                    # Latest eval run output
+│
+└── /web                                # Next.js 14 frontend
     └── /app
-        ├── page.tsx                  # Single-page app — sidebar + chat + source panel
-        ├── /components
-        │   ├── upload-zone.tsx
-        │   ├── document-list.tsx
-        │   ├── chat-message.tsx      # Inline citation chips + confidence badges
-        │   └── source-panel.tsx      # Slide-in panel with cited chunk text
-        └── /lib
-            └── api.ts                # All API calls + SSE stream parser
+        ├── page.tsx                    # Single-page app (sidebar + chat + source panel)
+        └── /components
+            ├── upload-zone.tsx
+            ├── document-list.tsx
+            ├── chat-message.tsx        # Inline citation chips + confidence badges
+            └── source-panel.tsx        # Slide-in panel with cited chunk highlighted
 ```
 
 ---
@@ -142,72 +146,33 @@ graph LR
 ## API Endpoints
 
 ```
-POST   /v1/documents                      Upload PDF/MD/TXT → {document_id, status}
-GET    /v1/documents                      List all documents
-GET    /v1/documents/{id}/status          Poll ingestion status
+POST   /v1/documents                     Upload PDF/MD/TXT → {document_id, status}
+GET    /v1/documents                     List documents
+GET    /v1/documents/{id}/status         Poll ingestion status
 
-GET    /v1/search?q=...                   Semantic search
+GET    /v1/search                        Semantic search
+         ?q=<query>
+         &mode=vector|hybrid|compare
          &top_k=5
          &document_id=<uuid>
-         &mode=vector|hybrid|compare
 
-POST   /v1/conversations                  {document_id} → {conversation_id}
+POST   /v1/conversations                 {document_id} → {conversation_id}
 GET    /v1/conversations
 GET    /v1/conversations/{id}
 
-POST   /v1/conversations/{id}/messages    {question} → SSE stream
-                                            event: token      {"text": "..."}
-                                            event: citation   {"id", "chunk_id", "section", ...}
-                                            event: complete   {"message_id", "answer", "citations",
-                                                               "claim_scores", "abstained", ...}
-                                            event: error      {"detail": "..."}
+POST   /v1/conversations/{id}/messages   {question} → SSE stream
+                                           event: token      {"text": "..."}
+                                           event: citation   {"id","chunk_id","section",...}
+                                           event: complete   {"message_id","answer","citations",
+                                                              "claim_scores","abstained",...}
+                                           event: error      {"detail": "..."}
 
-GET    /v1/eval/results                   Latest eval harness results (JSON)
+GET    /v1/eval/results                  Latest eval harness results (JSON)
 
-GET    /metrics                           Prometheus scrape endpoint
-GET    /healthz                           Liveness probe
-GET    /readyz                            Readiness probe (checks Supabase + Jina)
+GET    /metrics                          Prometheus scrape endpoint
+GET    /healthz                          Liveness probe → {"status": "ok"}
+GET    /readyz                           Readiness probe (checks Supabase + Jina)
 ```
-
----
-
-## Key Design Decisions
-
-### Structure-aware chunking over fixed-window chunking
-
-Most tutorials chunk at every N tokens blindly. This project splits by markdown headings first, then by paragraph within each section. Every chunk stores `start_char` and `end_char` offsets into the original document — these power citation highlighting. Blind fixed-window chunking breaks across section boundaries and makes citations meaningless.
-
-### Jina AI embeddings (cloud API, zero server RAM)
-
-Originally used `all-MiniLM-L6-v2` via `sentence-transformers` locally. Switching to deployment on Render's free tier (512 MB RAM) caused OOM on first request — sentence-transformers loads ~300 MB into RAM. Solution: Jina AI's `jina-embeddings-v3` API (1024-dim, 1M tokens free on signup). Zero RAM, simple HTTP call, supports asymmetric retrieval (`task: "retrieval.passage"` for ingestion, `task: "retrieval.query"` for search). The task type distinction meaningfully improves retrieval quality for question → passage matching.
-
-### pgvector + SECURITY DEFINER function
-
-Supabase's Row Level Security blocks Postgres functions from seeing rows unless the function runs with elevated permissions. The `match_chunks` function uses `SECURITY DEFINER` so it runs as postgres and bypasses RLS. The Python client sends embeddings as text strings (`"[0.1,0.2,...]"`) because the Supabase client can't auto-cast Python lists to the `vector` type.
-
-### Hybrid retrieval: vector + BM25 + RRF + cross-encoder
-
-Vector search alone misses exact keyword matches (proper nouns, technical terms). BM25 via Postgres `tsvector` catches these for free — no Elasticsearch. Results are fused with Reciprocal Rank Fusion (RRF, k=60): a chunk appearing in both lists gets a combined score even if it wasn't #1 in either. RRF requires no score normalisation, making it robust without tuning. Top-10 RRF candidates go through a cross-encoder reranker — unlike bi-encoder embeddings, the cross-encoder sees query and passage together, giving sharper relevance scores. Running it only on top-10 keeps latency acceptable.
-
-### Two-layer abstention
-
-**Pre-LLM gate** (`abstention.py`) — fires before any LLM call, saving tokens. Two signals: (1) top-1 cross-encoder rerank score (threshold: `-8.0`, env-tunable via `ABSTAIN_RERANK_THRESHOLD`), and (2) Jaccard overlap between query unigrams and chunk unigrams (threshold: `0.0`, effectively disabled — Jaccard is too aggressive for meta-queries like "summarise"). Either signal failing triggers abstention.
-
-**Post-LLM gate** (`citation_parser.py`) — the LLM is instructed to respond with `INSUFFICIENT_INFO` when sources don't support the answer. The parser checks for this sentinel before regex processing and returns `abstained: true`.
-
-Both thresholds are env-var tunable. Setting `ABSTAIN_JACCARD_THRESHOLD=0.0` was the fix for prod abstaining on valid summarisation queries — Jaccard overlap is near zero for meta-instructions like "summarise the key points" even when retrieval is strong.
-
-### Citation injection via [SOURCE_X] tokens
-
-The LLM emits `[SOURCE_X]` inline after every claim. After generation, `citation_parser.py` maps each token to the corresponding chunk's UUID and `(start_char, end_char)` span, and replaces tokens with clean `[1]`, `[2]` markers. Hallucinated citation numbers (outside the range of provided chunks) are silently dropped and logged.
-
-### Per-claim confidence scoring
-
-`confidence.py` makes one small LLM call to split the answer into atomic claims, embeds all claims in a single Jina API batch, then computes cosine similarity between each claim embedding and its cited chunk embeddings. Score = max similarity across cited chunks. Claims below `CLAIM_CONFIDENCE_THRESHOLD` (default 0.50) are flagged with an amber indicator in the UI. Trade-off vs. NLI entailment: cosine reuses the already-integrated embedder (no extra model download), adds ~50ms, and is sufficient for a UI confidence signal.
-
-### Prometheus metrics (RED method)
-
-`/metrics` exposes per-stage RED metrics: `rag_requests_total`, `rag_request_duration_seconds`, `rag_retrieval_duration_seconds{mode}`, `rag_embedding_duration_seconds{purpose}`, `rag_llm_duration_seconds{provider,purpose}`, `rag_abstentions_total{reason}`. These are scrape-ready for Grafana Cloud (free tier, no Docker required) or any Prometheus-compatible backend.
 
 ---
 
@@ -215,15 +180,20 @@ The LLM emits `[SOURCE_X]` inline after every claim. After generation, `citation
 
 ### Prerequisites
 
-- Python 3.13+ and `uv`
-- Node.js 22+ and `pnpm`
-- Free [Supabase](https://supabase.com) account
-- Free [Groq](https://console.groq.com) account
-- Free [Jina AI](https://jina.ai) account (1M tokens free)
+- Python 3.13+ with [`uv`](https://github.com/astral-sh/uv)
+- Node.js 22+ with `pnpm`
+- Free accounts: [Supabase](https://supabase.com), [Groq](https://console.groq.com), [Jina AI](https://jina.ai)
 
-### 1. Database setup
+### 1. Clone and configure
 
-In the Supabase SQL Editor:
+```bash
+git clone https://github.com/Utkarsh272/rag-grounded.git
+cd rag-grounded
+cp api/.env.example api/.env
+# Fill in: SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY, JINA_API_KEY
+```
+
+### 2. Database setup (Supabase SQL Editor)
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -263,15 +233,15 @@ CREATE TABLE messages (
 );
 ```
 
-Then create the two RPC functions — see `api/app/db/` for the full SQL.
-
-### 2. Backend
+### 3. Run locally
 
 ```bash
-cd api
-cp .env.example .env   # fill in keys
-uv sync
-uv run uvicorn app.main:app --reload --port 8000
+# Backend
+cd api && uv sync
+uv run uvicorn app.main:app --reload --port 8000 --host 0.0.0.0
+
+# Frontend (separate terminal)
+cd web && pnpm install && pnpm dev
 
 # Verify
 curl http://localhost:8000/healthz
@@ -279,18 +249,18 @@ curl http://localhost:8000/readyz
 curl http://localhost:8000/metrics | head -20
 ```
 
-### 3. Frontend
+### 4. Observability (optional, requires Docker)
 
 ```bash
-cd web
-pnpm install
-pnpm dev   # http://localhost:3000
+docker compose -f docker-compose.observability.yml up -d
+# Grafana: http://localhost:3001  (admin / admin) — dashboard auto-loads
+# Prometheus: http://localhost:9090
 ```
 
-### 4. Run the eval harness
+### 5. Run the eval harness
 
 ```bash
-# Upload distributed_systems_rag_eval.md via the UI, get document_id, then:
+# Upload distributed_systems_rag_eval.md via the UI, note the document_id, then:
 cd api
 uv run python tests/eval/run_eval.py \
   --document-id <uuid> \
@@ -301,16 +271,16 @@ uv run python tests/eval/run_eval.py \
 
 ## Roadmap
 
-- [x] Day 1 — Scaffolding, PDF/MD ingestion, document storage
+- [x] Day 1 — Scaffolding, PDF/MD/TXT ingestion, Supabase storage
 - [x] Day 2 — Structure-aware chunking, Jina embeddings, vector search
-- [x] Day 3 — BM25 keyword search + hybrid RRF fusion + cross-encoder reranking
-- [x] Day 4 — LLM answer generation with inline citation injection and SSE streaming
+- [x] Day 3 — BM25 + hybrid RRF fusion + cross-encoder reranking
+- [x] Day 4 — LLM answer generation, citation injection, SSE streaming
 - [x] Day 5 — Two-layer abstention + per-claim confidence scoring
-- [x] Day 6 — Full chat UI: drag-drop upload, streaming, citation chips, source panel
-- [x] Day 7 — Dockerfiles, CI pipeline, deployment to Vercel + Render
-- [x] Day 8 — Evaluation harness (20 Q&A ground truth, recall@5, answer accuracy, citation precision)
-- [x] Day 9 — Prometheus metrics (`/metrics`), OpenTelemetry tracing, `/readyz` readiness probe
-- [ ] Day 10 — DESIGN.md, 90-sec Loom demo video, final polish
+- [x] Day 6 — Full chat UI: upload, streaming, citation chips, source panel
+- [x] Day 7 — Dockerfiles, CI pipeline, Vercel + Render deployment
+- [x] Day 8 — Evaluation harness: recall@5, answer accuracy, citation precision
+- [x] Day 9 — Prometheus metrics, OpenTelemetry tracing, Grafana dashboard, `/readyz`
+- [x] Day 10 — DESIGN.md, final polish, shipped
 
 ---
 

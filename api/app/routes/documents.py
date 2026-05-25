@@ -1,18 +1,24 @@
 # api/app/routes/documents.py
 import os
-import uuid
+import time
 import traceback
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+
 from app.db.client import get_supabase
 from app.ingestion.chunker import chunk_text
 from app.ingestion.embedder import embed_texts
+from app.telemetry.metrics import record_ingestion, time_embedding
 
 router = APIRouter()
 
 
-async def process_document(document_id: str, raw_text: str):
+async def process_document(document_id: str, raw_text: str) -> None:
     """Background task: chunk → embed (Jina API) → store."""
     sb = get_supabase()
+    ingestion_start = time.perf_counter()
+
     try:
         sb.table("documents").update({"status": "processing"}).eq("id", document_id).execute()
 
@@ -26,7 +32,10 @@ async def process_document(document_id: str, raw_text: str):
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
             print(f"🔢 Embedding batch {i // batch_size + 1} ({len(batch)} chunks)...")
-            embeddings = embed_texts([c.content for c in batch])
+
+            with time_embedding("passage"):
+                embeddings = embed_texts([c.content for c in batch])
+
             rows = [
                 {
                     "document_id": document_id,
@@ -45,13 +54,23 @@ async def process_document(document_id: str, raw_text: str):
         sb.table("documents").update({"status": "complete"}).eq("id", document_id).execute()
         print(f"✅ Document {document_id} fully processed: {len(chunks)} chunks")
 
+        record_ingestion(
+            status="success",
+            duration_seconds=time.perf_counter() - ingestion_start,
+            num_chunks=len(chunks),
+        )
+
     except Exception as e:
         print(f"❌ Document {document_id} failed:")
         traceback.print_exc()
+        record_ingestion(
+            status="error",
+            duration_seconds=time.perf_counter() - ingestion_start,
+        )
         try:
             sb.table("documents").update({
                 "status": "failed",
-                "error_message": str(e)
+                "error_message": str(e),
             }).eq("id", document_id).execute()
         except Exception as db_err:
             print(f"❌ Also failed to update error status in DB: {db_err}")
@@ -99,7 +118,12 @@ def list_documents():
 @router.get("/v1/documents/{document_id}/status")
 def get_status(document_id: str):
     sb = get_supabase()
-    result = sb.table("documents").select("id, status, error_message").eq("id", document_id).execute()
+    result = (
+        sb.table("documents")
+        .select("id, status, error_message")
+        .eq("id", document_id)
+        .execute()
+    )
     if not result.data:
         raise HTTPException(404, "Document not found")
     return result.data[0]
